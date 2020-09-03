@@ -1,0 +1,9 @@
+{
+	"n_targets": 30594,
+	"n_bootstraps": 100,
+	"n_processed": 30401493,
+	"kallisto_version": "0.42.4",
+	"index_version": 10,
+	"start_time": "Tue May  9 11:27:30 2017",
+	"call": "kallisto quant -i transcripts.idx -o Beta5Rep2 -b 100 --bias -t 6 ../RawReads/Beta5Rep2_1.fastq ../RawReads/Beta5Rep2_2.fastq"
+}

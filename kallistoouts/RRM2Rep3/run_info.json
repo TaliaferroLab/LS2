@@ -1,0 +1,9 @@
+{
+	"n_targets": 30594,
+	"n_bootstraps": 100,
+	"n_processed": 38451220,
+	"kallisto_version": "0.42.4",
+	"index_version": 10,
+	"start_time": "Tue May  9 11:17:34 2017",
+	"call": "kallisto quant -i transcripts.idx -o RRM2Rep3 -b 100 --bias -t 6 ../RawReads/RRM2Rep3_1.fastq ../RawReads/RRM2Rep3_2.fastq"
+}

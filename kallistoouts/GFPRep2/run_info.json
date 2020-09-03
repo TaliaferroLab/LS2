@@ -1,0 +1,9 @@
+{
+	"n_targets": 30594,
+	"n_bootstraps": 100,
+	"n_processed": 39327863,
+	"kallisto_version": "0.42.4",
+	"index_version": 10,
+	"start_time": "Tue May  9 10:24:47 2017",
+	"call": "kallisto quant -i transcripts.idx -o GFPRep2 -b 100 --bias -t 6 ../RawReads/GFPRep2_1.fastq ../RawReads/GFPRep2_2.fastq"
+}

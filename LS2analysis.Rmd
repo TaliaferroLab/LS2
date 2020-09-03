@@ -1,0 +1,408 @@
+---
+title: "LS2 analaysis"
+author: "Matthew Taliaferro"
+date: "9/3/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This document contains the analysis of high-throughput sequencing data from S2 cells that express wildtype and mutant LS2 transgenes.
+
+Load libraries.
+
+```{r}
+library(dplyr)
+library(tximport)
+library(readr)
+library(biomaRt)
+library(pheatmap)
+library(ggplot2)
+library(reshape2)
+library(ggfortify)
+library(RColorBrewer)
+library(cowplot)
+library(UpSetR)
+```
+
+First, analysis of differential expression.  Use tximport to collapse kallisto-produced transcript quantifications into gene-level quantifications.
+
+```{r}
+mart <- biomaRt::useMart("ENSEMBL_MART_ENSEMBL", dataset = "dmelanogaster_gene_ensembl", host='uswest.ensembl.org')
+t2g <- biomaRt::getBM(attributes = c('ensembl_transcript_id', 'ensembl_gene_id', 'external_gene_name'), mart = mart)
+t2g <- dplyr::rename(t2g, target_id= ensembl_transcript_id, ext_gene = external_gene_name)
+
+base_dir <- 'kallistoouts'
+sample_id <- dir(file.path(base_dir))
+kal_dirs <- sapply(sample_id, function(id) file.path(base_dir, id, 'abundance.tsv'))
+tx2gene <- dplyr::select(t2g, target_id, ensembl_gene_id)
+
+txi <- tximport(kal_dirs, type = 'kallisto', tx2gene = tx2gene, countsFromAbundance = 'lengthScaledTPM')
+tpms <- data.frame(txi$abundance)
+tpms <- data.frame(add_rownames(tpms, 'ensembl_gene_id'))
+t2g <- dplyr::select(t2g, ensembl_gene_id, ext_gene)
+t2g <- unique(t2g)
+tpms <- inner_join(t2g, tpms, by = 'ensembl_gene_id')
+```
+
+Cluster samples based on gene expression.
+```{r}
+m <- dplyr::select(tpms, GFPRep1, GFPRep2, GFPRep3, WTRep1, WTRep2, WTRep3, d38Rep1, d38Rep2, d38Rep3, RRM2Rep1, RRM2Rep2, RRM2Rep3,
+                   Beta5Rep1, Beta5Rep2, Beta5Rep3, SF1Rep1, SF1Rep2, SF1Rep3, GSlinkerRep1, GSlinkerRep2, GSlinkerRep3)
+m <- as.matrix(m)
+m <- m + 0.000001 #add pseudocount
+m <- log10(m)
+m.cor <- cor(m, method = 'spearman')
+colors <- colorRampPalette(brewer.pal(n = 8, name = 'OrRd'))(100)
+pheatmap(m.cor, color = colors, display_numbers = FALSE, number_color = 'white', fontsize_number = 12, show_colnames = FALSE)
+```
+
+Now splicing analysis.  Read in rMATS outputs.
+
+```{r}
+gfpvwt <- read.table('rMATS/GFPvsWT/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+wtvd38 <- read.table('rMATS/WTvsd38/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+wtvrrm2 <- read.table('rMATS/WTvsRRM2/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+wtvbeta5 <- read.table('rMATS/WTvsBeta5/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+wtvsf1 <- read.table('rMATS/WTvsSF1/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+wtvgslinker <- read.table('rMATS/WTvsGSlinker/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+gfpvd38 <- read.table('rMATS/GFPvsd38/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+gfpvrrm2 <- read.table('rMATS/GFPvsRRM2/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+gfpvbeta5 <- read.table('rMATS/GFPvsBeta5/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+gfpvsf1 <- read.table('rMATS/GFPvsSF1/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+gfpvgslinker <- read.table('rMATS/GFPvsGSlinker/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+untreatedvsu2af38 <- read.table('rMATS/UntreatedvsU2AF38/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+untreatedvsu2af50 <- read.table('rMATS/UntreatedvsU2AF50/MATS_output/SE.MATS.JunctionCountOnly.prepped.txt', header = T)
+```
+
+
+Cluster and PCA of PSI values of replicates.
+```{r}
+#Get GFP PSI values
+gfp.psi <- dplyr::select(gfpvwt, eventID, S1.Rep1, S1.Rep2, S1.Rep3) %>%
+  dplyr::rename(GFP.Rep1 = S1.Rep1, GFP.Rep2 = S1.Rep2, GFP.Rep3 = S1.Rep3)
+
+#Get WT PSI values
+wt.psi <- dplyr::select(gfpvwt, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(WT.Rep1 = S2.Rep1, WT.Rep2 = S2.Rep2, WT.Rep3 = S2.Rep3)
+
+#Get d38 PSI values
+d38.psi <- dplyr::select(wtvd38, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(d38.Rep1 = S2.Rep1, d38.Rep2 = S2.Rep2, d38.Rep3 = S2.Rep3)
+
+#Get RRM2 PSI values
+rrm2.psi <- dplyr::select(wtvrrm2, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(RRM2.Rep1 = S2.Rep1, RRM2.Rep2 = S2.Rep2, RRM2.Rep3 = S2.Rep3)
+
+#Get Beta5 PSI values 
+beta5.psi <- dplyr::select(wtvbeta5, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(Beta5.Rep1 = S2.Rep1, Beta5.Rep2 = S2.Rep2, Beta5.Rep3 = S2.Rep3)
+
+#Get SF1 PSI values 
+sf1.psi <- dplyr::select(wtvsf1, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(SF1.Rep1 = S2.Rep1, SF1.Rep2 = S2.Rep2, SF1.Rep3 = S2.Rep3)
+
+#Get GSlinker PSI values 
+gslinker.psi <- dplyr::select(wtvgslinker, eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(GSlinker.Rep1 = S2.Rep1, GSlinker.Rep2 = S2.Rep2, GSlinker.Rep3 = S2.Rep3)
+
+#Merge data frames by eventID
+psis <- left_join(gfp.psi, wt.psi, by = 'eventID') %>%
+  left_join(., d38.psi, by = 'eventID') %>%
+  left_join(., rrm2.psi, by = 'eventID') %>%
+  left_join(., beta5.psi, by = 'eventID') %>%
+  left_join(., sf1.psi, by = 'eventID') %>%
+  left_join(., gslinker.psi, by = 'eventID')
+
+#Turn into matrix
+psis <- dplyr::select(psis, -eventID)
+psis <- na.omit(psis)
+psis.m <- as.matrix(psis)
+colors <- colorRampPalette(brewer.pal(9, 'PuRd'))(100)
+pheatmap(cor(psis.m, method = 'spearman'), color = colors, show_colnames = F)
+
+#Plot PCA
+psis.pca <- t(psis)
+samples <- unlist(strsplit(rownames(psis.pca), split = "\\."))
+samples <- samples[seq(1, length(samples), 2)]
+psis.pca.df <- data.frame('sample.rep' = rownames(psis.pca), sample = samples)
+pca <- prcomp(psis.pca, center = TRUE)
+pca.summary <- summary(pca)
+pca.summary <- pca.summary$importance
+pc1var = round(pca.summary[3,1] * 100, 1)
+pc2var = round(pca.summary[3,2] * 100 - pc1var, 1)
+autoplot(pca, data = psis.pca.df, colour = 'sample', label = FALSE, size = 3) + theme_bw() + xlab(paste('PC1,', pc1var, '% explained var.')) + ylab(paste('PC2,', pc2var, '% explained var.')) + 
+  scale_color_discrete(name = 'Sample') + guides(size = F) + theme_classic()
+```
+
+Define colors for later plots.
+```{r}
+beta5col <- brewer.pal(n = 8, 'Set1')[1]
+d38col <- brewer.pal(n = 8, 'Set1')[2]
+gfpcol <- brewer.pal(n = 8, 'Set1')[3]
+gslinkercol <- brewer.pal(n = 8, 'Set1')[4]
+rrm2col <- brewer.pal(n = 8, 'Set1')[5]
+sf1col <- brewer.pal(n = 8, 'Set1')[7]
+wtcol <- brewer.pal(n = 8, 'Set1')[8]
+
+mutantcolors <- c(beta5col, d38col, gfpcol, gslinkercol, rrm2col, sf1col, wtcol)
+```
+
+What is happening to WT-regulated exons in the mutants?
+```{r}
+#Get regulated exons
+regexons.wt <- dplyr::filter(gfpvwt, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.d38 <- dplyr::filter(gfpvd38, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.rrm2 <- dplyr::filter(gfpvrrm2, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.beta5 <- dplyr::filter(gfpvbeta5, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.sf1 <- dplyr::filter(gfpvsf1, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.gslinker <- dplyr::filter(gfpvgslinker, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+regexons.u2af38 <- dplyr::filter(untreatedvsu2af38, FDR < 0.05 & abs(IncLevelDifference) >= 0.05)$eventID
+
+#Do you want to define reg exons as those that are different between GFP and WT or as those that are different between GFP and any LS2 sample
+regexons <- as.character(regexons.wt) #different between GFP and WT
+regexons <- unique(c(as.character(regexons.wt), as.character(regexons.d38), as.character(regexons.rrm2), as.character(regexons.beta5), as.character(regexons.sf1), as.character(regexons.gslinker))) #different between GFP and any LS2 sample
+
+#Remove exons that are sensitive to U2AF38 knockdown?
+regexons <- setdiff(regexons, regexons.u2af38)
+
+#Get PSI values for GFP in WT regulated exons
+gfp.psi <- dplyr::filter(gfpvwt, eventID %in% regexons) %>%
+  dplyr::select(eventID, S1.Rep1, S1.Rep2, S1.Rep3) %>%
+  dplyr::rename(GFP.Rep1 = S1.Rep1, GFP.Rep2 = S1.Rep2, GFP.Rep3 = S1.Rep3)
+
+#Get PSI values for WT in WT regulated exons
+wt.psi <- dplyr::filter(gfpvwt, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(WT.Rep1 = S2.Rep1, WT.Rep2 = S2.Rep2, WT.Rep3 = S2.Rep3)
+
+#Get PSI values for d38 in WT regulated exons
+d38.psi <- dplyr::filter(wtvd38, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(d38.Rep1 = S2.Rep1, d38.Rep2 = S2.Rep2, d38.Rep3 = S2.Rep3)
+
+#Get PSI values for RRM2 in WT regulated exons
+rrm2.psi <- dplyr::filter(wtvrrm2, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(RRM2.Rep1 = S2.Rep1, RRM2.Rep2 = S2.Rep2, RRM2.Rep3 = S2.Rep3)
+
+#Get PSI values for Beta5 in WT regulated exons
+beta5.psi <- dplyr::filter(wtvbeta5, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(Beta5.Rep1 = S2.Rep1, Beta5.Rep2 = S2.Rep2, Beta5.Rep3 = S2.Rep3)
+
+#Get PSI values for SF1 in WT regulated exons
+sf1.psi <- dplyr::filter(wtvsf1, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(SF1.Rep1 = S2.Rep1, SF1.Rep2 = S2.Rep2, SF1.Rep3 = S2.Rep3)
+
+#Get PSI values for GSlinker in WT regulated exons
+gslinker.psi <- dplyr::filter(wtvgslinker, eventID %in% regexons) %>%
+  dplyr::select(eventID, S2.Rep1, S2.Rep2, S2.Rep3) %>%
+  dplyr::rename(GSlinker.Rep1 = S2.Rep1, GSlinker.Rep2 = S2.Rep2, GSlinker.Rep3 = S2.Rep3)
+
+#Merge data frames
+psis <- left_join(gfp.psi, wt.psi, by = 'eventID') %>%
+  left_join(., d38.psi, by = 'eventID') %>%
+  left_join(., rrm2.psi, by = 'eventID') %>%
+  left_join(., beta5.psi, by = 'eventID') %>%
+  left_join(., sf1.psi, by = 'eventID') %>%
+  left_join(., gslinker.psi, by = 'eventID')
+
+#Cluster if you want
+psis.c <- dplyr::select(psis, -eventID)
+psis.c <- na.omit(psis.c)
+psis.c.m <- as.matrix(psis.c)
+colors <- colorRampPalette(brewer.pal(9, 'PuRd'))(100)
+pheatmap(cor(psis.c.m, method = 'spearman'), color = colors, show_colnames = F)
+
+#PCA if you want
+psis.pca <- t(psis.c)
+samples <- unlist(strsplit(rownames(psis.pca), split = "\\."))
+samples <- samples[seq(1, length(samples), 2)]
+psis.pca.df <- data.frame('sample.rep' = rownames(psis.pca), sample = samples)
+pca <- prcomp(psis.pca, center = TRUE, scale = TRUE)
+pca.summary <- summary(pca)
+pca.summary <- pca.summary$importance
+pc1var = round(pca.summary[2,1] * 100, 1)
+pc2var = round(pca.summary[2,2] * 100, 1)
+mypal = c(brewer.pal(n = 8, 'Set1')[1:5], brewer.pal(n = 8, 'Set1')[7:8])
+autoplot(pca, data = psis.pca.df, colour = 'sample', label = FALSE, size = 5) + theme_bw() + xlab(paste0('PC1, ', pc1var, '% explained var.')) + ylab(paste('PC2,', pc2var, '% explained var.')) + 
+  scale_color_manual(values = mutantcolors) + guides(size = F) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + guides(color = F)
+```
+
+Volcano plot of WT-regulated exons.
+```{r}
+###########
+#Volcano of WT regulated exons
+#IncLevelDifference is sample1 (gfp) - sample2 (wt). It makes more sense to me to flip it.
+###########
+gfpvwt.sig <- mutate(gfpvwt, sig = ifelse(FDR < 0.05 & IncLevelDifference >= 0.05, 'sigexc', ifelse(FDR < 0.05 & IncLevelDifference <= -0.05, 'siginc', 'notsig')))
+exc.exoncount <- nrow(filter(gfpvwt.sig, sig == 'sigexc'))
+inc.exoncount <- nrow(filter(gfpvwt.sig, sig == 'siginc'))
+ggplot(gfpvwt.sig, aes(x = -IncLevelDifference, y = -log10(FDR), color = sig)) + theme_classic() + geom_point(pch = 21) +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), labels = c('NS', 'Excluded exons', 'Included exons'), name = '') + 
+  xlab(expression(paste(PSI['WT LS2'], '-', PSI['GFP']))) + ylab(expression(paste(-log['10'], 'FDR'))) + 
+  annotate('text', x = -0.75, y = 10, label = paste0(exc.exoncount, '\nexcluded exons'), color = 'red') + 
+  annotate('text', x = 0.75, y = 10, label = paste0(inc.exoncount, '\nincluded exons'), color = 'dodgerblue')
+```
+
+How do deltaPSIs between GFP and WT compare to deltaPSIs between GFP and mutant
+```{r}
+#Add in deltaPSI values
+psis.dpsi <- mutate(psis, WTdPSI = ((WT.Rep1 + WT.Rep2 + WT.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3)) %>%
+  mutate(., d38dPSI = ((d38.Rep1 + d38.Rep2 + d38.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3)) %>%
+  mutate(., RRM2dPSI = ((RRM2.Rep1 + RRM2.Rep2 + RRM2.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3)) %>%
+  mutate(., Beta5dPSI = ((Beta5.Rep1 + Beta5.Rep2 + Beta5.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3)) %>%
+  mutate(., SF1dPSI = ((SF1.Rep1 + SF1.Rep2 + SF1.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3)) %>%
+  mutate(., GSlinkerdPSI = ((GSlinker.Rep1 + GSlinker.Rep2 + GSlinker.Rep3) / 3) - ((GFP.Rep1 + GFP.Rep2 + GFP.Rep3) / 3))
+
+#How does activity (dPSI) of mutants compare to activity of WT?
+#Plot as ratio of mutant dPSI to WT dPSI
+dpsi.ratio <- dplyr::select(psis.dpsi, eventID, WTdPSI, d38dPSI, RRM2dPSI, Beta5dPSI, SF1dPSI, GSlinkerdPSI)
+dpsi.ratio <- mutate(dpsi.ratio, d38ratio = ifelse(((WTdPSI * d38dPSI) > 0), log2(d38dPSI/WTdPSI), NA)) %>% #If WTdPSI and d38dPSI have the same sign, take the ratio, if they don't, the value is NA
+  mutate(., RRM2ratio = ifelse(((WTdPSI * RRM2dPSI) > 0), log2(RRM2dPSI/WTdPSI), NA)) %>%
+  mutate(., Beta5ratio = ifelse(((WTdPSI * Beta5dPSI) > 0), log2(Beta5dPSI/WTdPSI), NA)) %>%
+  mutate(., SF1ratio = ifelse(((WTdPSI * SF1dPSI) > 0), log2(SF1dPSI/WTdPSI), NA)) %>%
+  mutate(., GSlinkerratio = ifelse(((WTdPSI * GSlinkerdPSI) > 0), log2(GSlinkerdPSI/WTdPSI), NA))
+dpsi.ratio.m <- melt(dpsi.ratio, id.var = 'eventID', measure.vars = c('d38ratio', 'RRM2ratio', 'Beta5ratio', 'SF1ratio', 'GSlinkerratio'))
+colors <- mutantcolors[c(2, 5, 1, 6, 4)] #we want these colors to be consistent so that each mutant has a consistent color
+
+ggplot(dpsi.ratio.m, aes(x = variable, color = variable, y = value)) + geom_boxplot(notch = TRUE, outlier.shape = NA) + scale_color_manual(values = colors) + coord_flip(ylim = c(-5,5)) + 
+  theme_classic() + geom_jitter(position = position_jitter(width = 0.1), alpha = 0.1) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  scale_x_discrete(limits = c('GSlinkerratio', 'SF1ratio', 'Beta5ratio', 'RRM2ratio', 'd38ratio'), labels = c('GS linker', 'SF1', 'Beta5', 'RRM2', 'U2AF38')) + 
+  guides(color = F) + xlab('') + ylab('Mutant delta PSI / WT delta PSI, log2') + geom_hline(yintercept = 0, color = 'gray', linetype = 'dashed')
+
+#Plot as fraction of deltaPSI "lost"
+#Fractional change in activity
+dpsi.ratio <- dplyr::select(psis.dpsi, eventID, WTdPSI, d38dPSI, RRM2dPSI, Beta5dPSI, SF1dPSI, GSlinkerdPSI)
+dpsi.ratio <- mutate(dpsi.ratio, d38ratio = ifelse(((WTdPSI * d38dPSI) > 0), (d38dPSI - WTdPSI) / WTdPSI, NA)) %>% #If WTdPSI and d38dPSI have the same sign, take the fraction lost, if they don't, the value is NA
+  mutate(., RRM2ratio = ifelse(((WTdPSI * RRM2dPSI) > 0), (RRM2dPSI - WTdPSI) / WTdPSI, NA)) %>%
+  mutate(., Beta5ratio = ifelse(((WTdPSI * Beta5dPSI) > 0), (Beta5dPSI - WTdPSI) / WTdPSI, NA)) %>%
+  mutate(., SF1ratio = ifelse(((WTdPSI * SF1dPSI) > 0), (SF1dPSI - WTdPSI) / WTdPSI, NA)) %>%
+  mutate(., GSlinkerratio = ifelse(((WTdPSI * GSlinkerdPSI) > 0), (GSlinkerdPSI - WTdPSI) / WTdPSI, NA))
+dpsi.ratio.m <- melt(dpsi.ratio, id.var = 'eventID', measure.vars = c('d38ratio', 'RRM2ratio', 'Beta5ratio', 'SF1ratio', 'GSlinkerratio'))
+colors <- mutantcolors[c(2, 5, 1, 6, 4)]
+
+ggplot(dpsi.ratio.m, aes(x = variable, color = variable, y = value)) + geom_boxplot(notch = TRUE, outlier.shape = NA) + scale_color_manual(values = colors) + coord_flip(ylim = c(-1,2)) + 
+  theme_classic() + geom_jitter(position = position_jitter(width = 0.1), alpha = 0.1) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  scale_x_discrete(limits = c('GSlinkerratio', 'SF1ratio', 'Beta5ratio', 'RRM2ratio', 'd38ratio'), labels = c('GS linker', 'SF1', 'Beta5', 'RRM2', 'U2AF38')) + 
+  guides(color = F) + xlab('') + ylab('Change in delta PSI relative to WT (%)') + geom_hline(yintercept = 0, color = 'gray', linetype = 'dashed') + 
+  scale_y_continuous(breaks = seq(-1, 2, 0.5), labels = seq(-100, 200, 50))
+
+#Plot a scatter for each mutant
+colors <- mutantcolors[c(2, 5, 1, 6, 4)]
+d38 <- ggplot(psis.dpsi, aes(x = WTdPSI, y = d38dPSI)) + geom_point(pch = 21, color = colors[1], alpha = 0.3) + theme_bw() + geom_abline() + 
+  coord_cartesian(xlim = c(-0.4, 0.4), ylim = c(-0.4, 0.4)) + xlab('WT dPSI') + ylab('U2AF38 dPSI') + ggtitle('U2AF38') + theme(panel.grid.minor = element_blank()) +
+  geom_density_2d(bins = 10, color = colors[1]) + geom_smooth(method = 'lm', color = colors[1])
+rrm2 <- ggplot(psis.dpsi, aes(x = WTdPSI, y = RRM2dPSI)) + geom_point(pch = 21, color = colors[2], alpha = 0.3) + theme_bw() + geom_abline() + 
+  coord_cartesian(xlim = c(-0.4, 0.4), ylim = c(-0.4, 0.4)) + xlab('WT dPSI') + ylab('RRM2 dPSI') + ggtitle('RRM2') + theme(panel.grid.minor = element_blank()) +
+  geom_density_2d(bins = 10, color = colors[2]) + geom_smooth(method = 'lm', color = colors[2])
+beta5 <- ggplot(psis.dpsi, aes(x = WTdPSI, y = Beta5dPSI)) + geom_point(pch = 21, color = colors[3], alpha = 0.3) + theme_bw() + geom_abline() + 
+  coord_cartesian(xlim = c(-0.4, 0.4), ylim = c(-0.4, 0.4)) + xlab('WT dPSI') + ylab('Beta5 dPSI') + ggtitle('Beta 5') + theme(panel.grid.minor = element_blank()) +
+  geom_density_2d(bins = 10, color = colors[3]) + geom_smooth(method = 'lm', color = colors[3])
+sf1 <- ggplot(psis.dpsi, aes(x = WTdPSI, y = SF1dPSI)) + geom_point(pch = 21, color = colors[4], alpha = 0.3) + theme_bw() + geom_abline() + 
+  coord_cartesian(xlim = c(-0.4, 0.4), ylim = c(-0.4, 0.4)) + xlab('WT dPSI') + ylab('SF1 dPSI') + ggtitle('SF1') + theme(panel.grid.minor = element_blank()) +
+  geom_density_2d(bins = 10, color = colors[4]) + geom_smooth(method = 'lm', color = colors[4])
+gslinker <- ggplot(psis.dpsi, aes(x = WTdPSI, y = GSlinkerdPSI)) + geom_point(pch = 21, color = colors[5], alpha = 0.3) + theme_bw() + geom_abline() + 
+  coord_cartesian(xlim = c(-0.4, 0.4), ylim = c(-0.4, 0.4)) + xlab('WT dPSI') + ylab('GS linker dPSI') + ggtitle('GS linker') + theme(panel.grid.minor = element_blank()) +
+  geom_density_2d(bins = 10, color = colors[5]) + geom_smooth(method = 'lm', color = colors[5])
+
+plot_grid(d38, rrm2, beta5, sf1, gslinker, ncol = 3)
+```
+
+
+Motif enrichments as CDF
+
+Motif starts calculated with rMATS_motif_cdf_se.py
+The y-axis is the fractions of seqs that have a motif as of the given location.
+Seqs with a value of 1000 do not have a motif at all.  Thats why the plot only goes to 200.
+
+Less included = less included in GFP = LS2 activated
+More included = more included in GFP = LS2 repressed
+
+```{r}
+motifstarts <- read.table('rMATS/MotifAnalysis/SE_cdf/bigdf.txt', header = T)
+#motifstarts <- read.table('~/Documents/MIT/LS2/Sequencing/rMATS/MotifAnalysis/bigdf.txt', header = T)
+ctrlvsless.seq1 <- round(wilcox.test(filter(motifstarts, region == 'seq1' & seqclass == 'lessincluded' )$motifstart, 
+                               filter(motifstarts, region == 'seq1' & seqclass == 'control')$motifstart)$p.value, 2)
+ctrlvsmore.seq1 <- round(wilcox.test(filter(motifstarts, region == 'seq1' & seqclass == 'moreincluded' & motifstart)$motifstart, 
+                               filter(motifstarts, region == 'seq1' & seqclass == 'control' & motifstart)$motifstart)$p.value, 2)
+
+ctrlvsless.seq2 <- round(wilcox.test(filter(motifstarts, region == 'seq2' & seqclass == 'lessincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq2' & seqclass == 'control')$motifstart)$p.value, 3)
+ctrlvsmore.seq2 <- round(wilcox.test(filter(motifstarts, region == 'seq2' & seqclass == 'moreincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq2' & seqclass == 'control')$motifstart)$p.value, 3)
+
+ctrlvsless.seq3 <- round(wilcox.test(filter(motifstarts, region == 'seq3' & seqclass == 'lessincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq3' & seqclass == 'control')$motifstart)$p.value, 2)
+ctrlvsmore.seq3 <- round(wilcox.test(filter(motifstarts, region == 'seq3' & seqclass == 'moreincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq3' & seqclass == 'control')$motifstart)$p.value, 2)
+
+ctrlvsless.seq4 <- round(wilcox.test(filter(motifstarts, region == 'seq4' & seqclass == 'lessincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq4' & seqclass == 'control')$motifstart)$p.value, 2)
+ctrlvsmore.seq4 <- round(wilcox.test(filter(motifstarts, region == 'seq4' & seqclass == 'moreincluded')$motifstart, 
+                               filter(motifstarts, region == 'seq4' & seqclass == 'control')$motifstart)$p.value, 2)
+
+
+seq1 <- ggplot(filter(motifstarts, region == 'seq1'), aes(x = motifstart, color = seqclass)) + stat_ecdf() + coord_cartesian(xlim = c(0,200), ylim = c(0, 0.2)) +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), guide = F) + theme_classic() + xlab('') + ylab('Fraction of sequences') + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsless.seq1), color = 'red', x = 50, y = 0.19, hjust = 0) + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsmore.seq1), color = 'dodgerblue', x = 50, y = 0.17, hjust = 0) +
+  scale_y_continuous(expand = c(0,0))
+
+seq2 <- ggplot(filter(motifstarts, region == 'seq2'), aes(x = motifstart, color = seqclass)) + geom_step(aes(y = 1 - ..y..), stat = 'ecdf') +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), guide = F) + theme_classic() + xlab('') +
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsless.seq2), color = 'red', x = 150, y = 0.19, hjust = 0) + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsmore.seq2), color = 'dodgerblue', x = 150, y = 0.17, hjust = 0) +
+  coord_cartesian(xlim = c(0, 200), ylim = c(0, 0.2)) +
+  theme(axis.line.y = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank(), axis.title.y = element_blank()) + 
+  scale_x_reverse() + 
+  scale_y_continuous(expand = c(0,0))
+
+seq3 <- ggplot(filter(motifstarts, region == 'seq3'), aes(x = motifstart, color = seqclass)) + stat_ecdf() + coord_cartesian(xlim = c(0,200), ylim = c(0, 0.2)) +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), guide = F) + theme_classic() + xlab('') + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsless.seq3), color = 'red', x = 50, y = 0.19, hjust = 0) + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsmore.seq3), color = 'dodgerblue', x = 50, y = 0.17, hjust = 0) + 
+  theme(axis.line.y = element_blank(), axis.ticks.y = element_blank(), axis.text.y = element_blank(), axis.title.y = element_blank()) +
+  scale_y_continuous(expand = c(0,0))
+
+seq4 <- ggplot(filter(motifstarts, region == 'seq4'), aes(x = motifstart, color = seqclass)) + geom_step(aes(y = 1 - ..y..), stat = 'ecdf') +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), guide = F) + theme_classic() + xlab('') + ylab('Fraction of sequences') + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsless.seq4), color = 'red', x = 150, y = 0.19, hjust = 0) + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsmore.seq4), color = 'dodgerblue', x = 150, y = 0.17, hjust = 0) +
+  scale_x_reverse() + coord_cartesian(xlim = c(0, 200), ylim = c(0, 0.2)) + scale_y_continuous(position = 'right', expand = c(0,0)) +
+  theme(axis.title.y = element_blank())
+
+#Gene model
+seq1model <- ggplot() + theme_classic() + theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank()) + 
+  geom_rect(aes(xmin = 0, xmax = 0.25, ymin = 0, ymax = 1)) + geom_rect(aes(xmin = 0.25, xmax = 1, ymin = 0.33, ymax = 0.67)) + scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+
+seq2model <- ggplot() + theme_classic() + theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank()) + 
+  geom_rect(aes(xmin = 0.75, xmax = 1, ymin = 0, ymax = 1), fill = 'purple') + geom_rect(aes(xmin = 0, xmax = 0.75, ymin = 0.33, ymax = 0.67)) + 
+  scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0))
+
+seq3model <- ggplot() + theme_classic() + theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank()) + 
+  geom_rect(aes(xmin = 0, xmax = 0.25, ymin = 0, ymax = 1), fill = 'purple') + geom_rect(aes(xmin = 0.25, xmax = 1, ymin = 0.33, ymax = 0.67)) + 
+  scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0))
+
+seq4model <- ggplot() + theme_classic() + theme(axis.line = element_blank(), axis.text = element_blank(), axis.ticks = element_blank()) + 
+  geom_rect(aes(xmin = 0.75, xmax = 1, ymin = 0, ymax = 1)) + geom_rect(aes(xmin = 0, xmax = 0.75, ymin = 0.33, ymax = 0.67)) + scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))
+
+
+#This plot is just to extract a legend
+legend <- cowplot::get_legend(ggplot(filter(motifstarts, region == 'seq1'), aes(x = motifstart, color = seqclass)) + stat_ecdf() + coord_cartesian(xlim = c(0,200), ylim = c(0, 0.2)) +
+  scale_color_manual(values = c('gray', 'red', 'dodgerblue'), labels = c('Control', 'LS2 activated', 'LS2 repressed'), name = '') + theme_classic() + xlab('') + ylab('Fraction of sequences') + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsless.seq1), color = 'red', x = 50, y = 0.2, hjust = 0) + 
+  annotate(geom = 'text', label = paste0('p = ', ctrlvsmore.seq1), color = 'dodgerblue', x = 50, y = 0.19, hjust = 0))
+
+ggdraw() + draw_plot(seq1, 0, 0.1, 0.225, 0.9) + draw_plot(seq2, 0.225, 0.1, 0.225, 0.9) + draw_plot(seq3, 0.45, 0.1, 0.225, 0.9) + 
+  draw_plot(seq4, 0.675, 0.1, 0.225, 0.9) + draw_plot(legend, 0.9, 0.1, 0.1, 0.9) +
+  draw_plot(seq1model, 0.05, 0, 0.175, 0.1) + draw_plot(seq2model, 0.225, 0, 0.22, 0.1) + draw_plot(seq3model, 0.455, 0, 0.22, 0.1) +
+  draw_plot(seq4model, 0.675, 0, 0.19, 0.1)
+```
+

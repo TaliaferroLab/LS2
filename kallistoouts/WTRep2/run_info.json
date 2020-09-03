@@ -1,0 +1,9 @@
+{
+	"n_targets": 30594,
+	"n_bootstraps": 100,
+	"n_processed": 34112011,
+	"kallisto_version": "0.42.4",
+	"index_version": 10,
+	"start_time": "Tue May  9 10:40:43 2017",
+	"call": "kallisto quant -i transcripts.idx -o WTRep2 -b 100 --bias -t 6 ../RawReads/WTRep2_1.fastq ../RawReads/WTRep2_2.fastq"
+}

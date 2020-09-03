@@ -1,0 +1,9 @@
+{
+	"n_targets": 30594,
+	"n_bootstraps": 100,
+	"n_processed": 21498943,
+	"kallisto_version": "0.42.4",
+	"index_version": 10,
+	"start_time": "Tue May  9 11:51:40 2017",
+	"call": "kallisto quant -i transcripts.idx -o GSlinkerRep1 -b 100 --bias -t 6 ../RawReads/GSlinkerRep1_1.fastq ../RawReads/GSlinkerRep1_2.fastq"
+}
